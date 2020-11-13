@@ -1,0 +1,207 @@
+---
+title: "R Notebook"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+Note: EDA has been deleted for the purposes of reporting.
+
+
+## Reading in Data and Creating a DF
+
+```{r}
+library(jsonlite)
+
+geojsons <- list.files(pattern = "*.geojson")
+days <- lapply(geojsons, read_json)
+
+# Functions that Exctracts the Single Features
+extractlongitude <- function(feature){
+  longitude <- feature$geometry$coordinates[[1]]
+  return(longitude)
+}
+
+extractlatt <- function(feature1){
+  lattitude <- feature1$geometry$coordinates[[2]]
+  return(lattitude)
+}
+
+extracttime <- function(feature2){
+  time <-as.character(feature2$properties$time_long)
+  return(time)
+}
+
+extracttime2 <- function(feature3){
+  time2 <-as.character(feature3$properties$time)
+  return(time2)
+}
+
+extractspeed <- function(feature4){
+  if ("speed" %in% names(feature4$properties)) {
+    speed <- feature4$properties$speed
+    return(speed)
+  }
+  else{
+    return(NA)
+  }
+}
+
+options(scipen=999)
+
+# Function Retrieves Features from a Single File
+getdayfeatures <- function(day){
+  features <- day$features
+  outputlong <- vector("double", length = length(features))
+  outputlatt <- vector("double", length = length(features))
+  outputtime <- vector("numeric", length = length(features))
+  outputtime2 <- vector("numeric", length = length(features))
+  outputspeed <- vector("double", length = length(features))
+  outputorder <- vector("double", length = length(features))
+  
+  
+  for (i in seq_along(features)){
+    outputlong[i] <- extractlongitude(features[[i]])
+    outputlatt[i] <- extractlatt(features[[i]])
+    outputtime[i] <- extracttime(features[[i]])
+    outputtime2[i] <- extracttime2(features[[i]])
+    outputspeed[i] <- extractspeed(features[[i]])
+    outputorder[i] <- i
+  }
+  
+  output <- cbind("Lattitude" = outputlatt, "Longitude" = outputlong, "Time" = as.numeric(as.character(outputtime)), "Time 2" = outputtime2, "Speed" = outputspeed, "Order" = outputorder)
+  
+  return(output)
+}
+
+# Applying Feature Extraction Across All Files
+featuresfinal <- lapply(days, getdayfeatures)
+
+# Building a DF from a List of Matricies
+library(plyr)
+library(varhandle)
+df <- unfactor(arrange(ldply(featuresfinal, data.frame), Time))
+```
+
+
+## Deleting Outlier Data and Finding Initial Location, Final Location, and DT
+
+```{r}
+# Visualizing Locations
+# plot(df$Longitude, df$Lattitude, xlab = "Longitude", ylab = "Lattitude")
+
+# Identifying Outlying Path
+maxlatt <- max(df$Lattitude)
+index <- which(df$Lattitude == maxlatt)
+outlierday <- df[index,]$Time.2
+
+# Removing Outlier and Approxomating Initial Location
+initiallocationv <- df[, 6] == 1
+initiallocationwo <- df[initiallocationv,]
+initiallocation <- initiallocationwo[-7,]
+initiallocation
+  
+startinglong <- mean(initiallocation$Longitude)
+startinglatt <- mean(initiallocation$Lattitude)
+
+# Approxomating Final Location
+l1 <- nrow(featuresfinal[[1]])
+l2 <- nrow(featuresfinal[[2]]) + l1
+l3 <- nrow(featuresfinal[[3]]) + l2
+l4 <- nrow(featuresfinal[[4]]) + l3
+l5 <- nrow(featuresfinal[[5]]) + l4
+l6 <- nrow(featuresfinal[[6]]) + l5
+l7 <- nrow(featuresfinal[[7]]) + l6
+l8 <- nrow(featuresfinal[[8]]) + l7
+l9 <- nrow(featuresfinal[[9]]) + l8
+l10 <- nrow(featuresfinal[[10]]) + l9
+l11 <- nrow(featuresfinal[[11]]) + l10
+breaks <- c(l1, l2, l3, l4, l5, l6, l8, l9, l10, l11)
+
+# l7 has been ommitted, because that walk is outside of the scope of regular commute.
+finallocation <- df[breaks,]
+finallocation
+finallong <- mean(finallocation$Longitude)
+finallatt <- mean(finallocation$Lattitude)
+finallong
+finallatt
+
+wayneshouse <- rbind(finallocation, initiallocation)
+wayneshouselatt <- mean(wayneshouse$Lattitude)
+wayneshouselong <- mean(wayneshouse$Longitude)
+
+# This is where the bomb will be sent; regardless of the starting location.
+
+# Finding the Average Difference in Each Time
+df$Time3 <- as.POSIXct(df$Time.2,format="%Y-%m-%dT%H:%M:%OS")
+
+library(tidyverse)
+df <- df %>% 
+  mutate(DT = lag(Time3, n=1L) - Time3)
+
+df$DT <- abs(df$DT)
+
+# By observing the data, Wayne seems to be changing modes of transportation. For instance, it is clear that Wayne is using a bike or car in certain instances and walking in others. Without knowing the mode of transportation beforehand for the algorithm, it will be impossible to estimate where he is within 5 meters (even with advanced ML or kriging).
+
+```
+
+
+## Approxomating How Long It Takes Wayne to go Home
+```{r}
+# It appears Wayne's data for day 1 was ruined by a bike ride, because his trip home was about 4 minutes. This also appears to have happened on the 6th day with a 9 minute commute. 
+
+# Finding where and When Wayne is Safe or Vulnerable by Summing Waynes DTs for Trip Home (the last time he was stationary for more than 5 minutes to the last movement in the file). 5 minutes was an abritrary number chosen to define "trips"
+
+which(df$DT >= 300)
+t1 <- sum(df$DT[215:339])
+t2 <- sum(df$DT[1023:1360])
+t3 <- sum(df$DT[1724:2043])
+t4 <- sum(df$DT[2405:2754])
+t5 <- sum(df$DT[3985:4332])
+t6 <- sum(df$DT[4662:4990])
+t7 <- sum(df$DT[5530:5857])
+t2
+
+# This is the length of his average commute home.
+ach <- mean(c(t1, t2, t3, t4, t5, t6, t7))
+ach
+
+# This will be added on to the initial time stamps given to get the timing of the bombing. The location will be average starting location and finishing location.
+```
+
+
+## Bombing Algorithm
+```{r}
+#geojsons <- list.files(pattern = "*.geojson")
+#week3 <- lapply(geojsons, read_json)
+
+bomb <- function(week3){
+  
+  extracttime <- function(feature20){
+    time <-as.character(feature20$properties$time_long)
+    return(time)
+  }
+  
+  getanswerfeature <- function(answerday){
+    
+    features1 <- answerday$features
+    outputtimesec <- vector("numeric", length = length(features1))
+    
+    for (i in seq_along(features1)){
+      outputtimesec[i] <- extracttime(features1[[i]])
+      return(outputtimesec)
+    }
+    
+  }
+  
+  bombtime1 <- outputtimesec[1] + ach
+  bombtime2 <- outputtimesec[2] + ach
+  
+  print("I will bomb the location")
+  print(wayneshouselatt)
+  print(wayneshouselong)
+  print("At both")
+  print(bombtime1)
+  print(bombtime2)
+}  
+  
+```
